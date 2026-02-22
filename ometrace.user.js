@@ -3,6 +3,13 @@
 // @version      1.0
 // @description  Captures IP, location, and attempts gender detection on Ome.tv safely
 // @match        https://ome.tv/*
+// @match        https://omegleapp.me/*
+// @match        https://nsfw.omegleapp.me/*
+// @match        https://chatroulette.com/*
+// @match        https://monkey.app/*
+// @match        https://omegleweb.com/*
+// @match        https://thundr.com/*
+// @match        https://umingle.com/*
 // @grant        unsafeWindow
 // @grant        GM_addStyle
 // @run-at       document-start
@@ -30,8 +37,17 @@ window.__OME_OVERLAY_LOADED__ = true;
     const randomPrefix = Math.random().toString(36).substring(2, 10);
 
     let ipinfoCache = {};
-    try { const raw = localStorage.getItem(IPINFO_CACHE_KEY); if (raw) ipinfoCache = JSON.parse(raw); } catch (e) { ipinfoCache = {}; }
-    function saveIpinfoCache() { try { localStorage.setItem(IPINFO_CACHE_KEY, JSON.stringify(ipinfoCache)); } catch (e) { } }
+    try {
+        const raw = localStorage.getItem(IPINFO_CACHE_KEY);
+        if (raw) ipinfoCache = JSON.parse(raw);
+    } catch (e) {
+        ipinfoCache = {};
+    }
+    function saveIpinfoCache() {
+        try {
+            localStorage.setItem(IPINFO_CACHE_KEY, JSON.stringify(ipinfoCache));
+        } catch (e) { }
+    }
 
     let isStreamerMode = false;
     let areModelsLoaded = false;
@@ -218,22 +234,25 @@ window.__OME_OVERLAY_LOADED__ = true;
     }
 
     async function processIpInfo(json) {
-        let contentHTML = "";
-        let mapImageUrl = "";
+        let mapImageUrl = null;
         let location = json.loc || null;
 
-        let ipValue = isStreamerMode ? 'REDACTED' : (json.ip || 'N/A');
+        let ipValue = isStreamerMode ? 'IP HIDDEN' : (json.ip || 'N/A');
         let country = json.country || 'N/A';
         let city = json.city || 'N/A';
         let region = json.region || 'N/A';
         let org = json.org || 'N/A';
 
-        contentHTML = `
+        // Define the base HTML that is always shown
+        const baseHTML = `
         <i class="fa-solid fa-earth-americas"></i><span>${country}</span><br>
         <i class="fa-solid fa-city"></i><span>${city}</span><br>
         <i class="fa-solid fa-signs-post"></i><span>${region}</span><br>
         <i class="fa-solid fa-ethernet"></i><span>${org}</span><br>
-        <i class="fa-solid fa-location-dot"></i><span>${ipValue}</span>`;
+        <i class="fa-solid fa-location-dot"></i><span>${ipValue}</span><br>`;
+
+        // Show initial info with loading spinner for map
+        updateOverlayHTML(baseHTML + `<i class="fa-solid fa-spinner fa-spin"></i><span> Generating map...</span>`);
 
         if (location) {
             const [lat, lon] = location.split(',');
@@ -245,58 +264,53 @@ window.__OME_OVERLAY_LOADED__ = true;
             }
         }
 
-        // Pass location data. Note: We pass mapUrl regardless of streamer mode now
-        updateOverlayHTML(contentHTML, mapImageUrl, location);
+        // Update with final content: baseHTML + map (if available)
+        // We pass baseHTML as content. The map is passed separately via argument.
+        // This removes the "Generating map..." text.
+        updateOverlayHTML(baseHTML, mapImageUrl, location);
     }
-async function fetchMapImage(lat, lon) {
-    const mapUrl = `https://maps.geoapify.com/v1/staticmap?style=osm-bright&width=${MAP_WIDTH}&height=${MAP_HEIGHT}&center=lonlat:${lon},${lat}&zoom=12&marker=lonlat:${lon},${lat};color:%23ff0000;size:medium&apiKey=${GEOAPIFY_API_KEY}`;
 
-    // Fetch the image as a blob
-    const response = await fetch(mapUrl);
-    if (!response.ok) throw new Error('Failed to fetch map image');
+    async function fetchMapImage(lat, lon) {
+        const mapUrl = `https://maps.geoapify.com/v1/staticmap?style=osm-bright&width=${MAP_WIDTH}&height=${MAP_HEIGHT}&center=lonlat:${lon},${lat}&zoom=12&marker=lonlat:${lon},${lat};color:%23ff0000;size:medium&apiKey=${GEOAPIFY_API_KEY}`;
 
-    const imgBlob = await response.blob();
-    const img = new Image();
-    const imgURL = URL.createObjectURL(imgBlob);
+        const response = await fetch(mapUrl);
+        if (!response.ok) throw new Error('Failed to fetch map image');
 
-    return new Promise((resolve, reject) => {
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+        const imgBlob = await response.blob();
+        const img = new Image();
+        const imgURL = URL.createObjectURL(imgBlob);
 
-            // Define the dimensions of the image and the crop
-            const imageWidth = MAP_WIDTH;
-            const imageHeight = MAP_HEIGHT;
-            const cropHeight = imageHeight - 35;  // Crop the bottom 30px
+        return new Promise((resolve, reject) => {
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const imageWidth = MAP_WIDTH;
+                const imageHeight = MAP_HEIGHT;
+                const cropHeight = imageHeight - 35;
 
-            // Crop the image by drawing it on the canvas
-            canvas.width = imageWidth;
-            canvas.height = cropHeight;
+                canvas.width = imageWidth;
+                canvas.height = cropHeight;
 
-            ctx.drawImage(img, 0, 0, imageWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, imageWidth, cropHeight, 0, 0, canvas.width, canvas.height);
 
-            const croppedImageUrl = canvas.toDataURL(); // Get the base64 encoded image
-            resolve(croppedImageUrl);  // Resolve with the cropped image URL
-        };
+                const croppedImageUrl = canvas.toDataURL();
+                resolve(croppedImageUrl);
+            };
 
-        img.onerror = (e) => reject('Image load error: ' + e);
-
-        img.src = imgURL; // Start loading the image
-    });
-}
+            img.onerror = (e) => reject('Image load error: ' + e);
+            img.src = imgURL;
+        });
+    }
 
     // --- UI UPDATE LOGIC ---
     function updateOverlayHTML(content, mapUrl = null, location = null) {
         let existingOverlay = document.getElementById(randomPrefix + '_overlay');
-
         if (!existingOverlay) {
             createBaseOverlay();
             existingOverlay = document.getElementById(randomPrefix + '_overlay');
         }
 
-        // 1. Update IP Text
         let ipInfoDiv = document.getElementById(randomPrefix + '_IPInfo');
-
         if (!ipInfoDiv) {
             ipInfoDiv = document.createElement('div');
             ipInfoDiv.id = randomPrefix + '_IPInfo';
@@ -306,15 +320,11 @@ async function fetchMapImage(lat, lon) {
 
         if (content) ipInfoDiv.innerHTML = content;
 
-        // 2. Update Map
         let mapWrapper = existingOverlay.querySelector('.map-wrapper');
-
         if (!mapWrapper) {
             mapWrapper = document.createElement('div');
             mapWrapper.className = 'map-wrapper';
-            mapWrapper.style.cssText = `
-            display: none; /* Start hidden */
-        `;
+            mapWrapper.style.cssText = `display: none;`;
             existingOverlay.appendChild(mapWrapper);
         }
 
@@ -331,7 +341,6 @@ async function fetchMapImage(lat, lon) {
             const [lat, lon] = location.split(',');
             mapWrapper.onclick = () => window.open(`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=12/${lat}/${lon}`, '_blank');
 
-            // Show the map
             mapWrapper.style.display = 'block';
         } else {
             // If no map, keep it hidden
@@ -343,7 +352,6 @@ async function fetchMapImage(lat, lon) {
         const overlay = document.createElement('div');
         overlay.id = randomPrefix + '_overlay';
 
-        // Info section
         const infoParagraph = document.createElement('p');
         infoParagraph.id = randomPrefix + '_Info';
 
@@ -353,20 +361,12 @@ async function fetchMapImage(lat, lon) {
 
         infoParagraph.appendChild(ipInfoDiv);
 
-        // Map section
         const mapWrapper = document.createElement('div');
         mapWrapper.className = 'map-wrapper';
-        mapWrapper.style.cssText = `
-        display: none; /* Ensure map is hidden initially */
-    `;
+        mapWrapper.style.cssText = `display: none;`;
 
-        // Buttons container
         const buttonsContainer = document.createElement('div');
         buttonsContainer.className = 'button-container';
-
-        const mapButton = document.createElement('div');
-        mapButton.className = 'overlay-button map';
-        mapButton.textContent = 'Map';
 
         const faceBoxesToggleButton = document.createElement('div');
         faceBoxesToggleButton.className = 'overlay-button faceboxes';
@@ -378,13 +378,10 @@ async function fetchMapImage(lat, lon) {
         streamerToggleButton.textContent = 'Streamer Mode';
         streamerToggleButton.onclick = window.streamerMode;
 
-        // Append map first, then the buttons
-        overlay.appendChild(infoParagraph);    // Append Info
-        overlay.appendChild(mapWrapper);      // Append Map above the buttons
-        overlay.appendChild(buttonsContainer); // Append Buttons last
+        overlay.appendChild(infoParagraph);
+        overlay.appendChild(mapWrapper);
+        overlay.appendChild(buttonsContainer);
 
-        // Add map button to the buttons container
-        buttonsContainer.appendChild(mapButton);
         buttonsContainer.appendChild(faceBoxesToggleButton);
         buttonsContainer.appendChild(streamerToggleButton);
 
@@ -399,7 +396,6 @@ async function fetchMapImage(lat, lon) {
             btn.style.color = isStreamerMode ? '#00ff00' : '#fff';
             btn.style.borderColor = isStreamerMode ? 'rgba(0, 255, 0, 0.6)' : 'rgba(0, 217, 255, 0.3)';
         }
-        // Refresh data if exists to update the 'REDACTED' text
         if (lastCapturedIP && ipinfoCache[lastCapturedIP]) processIpInfo(ipinfoCache[lastCapturedIP].data);
     };
 
@@ -441,6 +437,7 @@ async function fetchMapImage(lat, lon) {
             @import url('https://fonts.googleapis.com/css2?family=Ubuntu&display=swap');
             #${randomPrefix}_overlay {
                 position: fixed;
+                min-width: 250px;
                 z-index: 9999;
                 background-color: rgba(17, 24, 39, 0.95);
                 box-shadow: 0px 0px 20px rgba(0, 217, 255, 0.2);
@@ -451,7 +448,6 @@ async function fetchMapImage(lat, lon) {
                 border-radius: 12px;
                 transition: all 0.3s ease;
                 color: #fff;
-                max-width: 250px;
                 font-family: 'Ubuntu', sans-serif;
             }
 
@@ -516,7 +512,7 @@ async function fetchMapImage(lat, lon) {
             .map-wrapper {
                 margin-bottom: 10px;
                 width: 100%;
-                height: 154px; /* Ensure no space below */
+                height: 154px; 
                 overflow: hidden;
                 border-radius: 6px;
                 border: 1px solid rgba(0, 217, 255, 0.3);
@@ -526,9 +522,9 @@ async function fetchMapImage(lat, lon) {
 
             .map-wrapper img {
                 width: 100%;
-                height: auto; /* Maintain aspect ratio */
-                max-height: 100%; /* Ensure image does not overflow */
-                object-fit: cover; /* Preserve aspect ratio */
+                height: auto;
+                max-height: 100%; 
+                object-fit: cover; 
                 position: absolute;
                 top: 0;
                 left: 0;
